@@ -237,5 +237,11 @@ app.get('/api/content', async (req, res) => {
   }
 })
 
+// Health check endpoint for load balancers and platforms (Render) to probe
+app.get('/healthz', (req, res) => {
+  // lightweight check: ensure process is up. Do NOT expose sensitive details.
+  res.status(200).json({ status: 'ok' })
+})
+
 const port = process.env.PORT || 3000
 app.listen(port, () => console.log(`Admin proxy server listening on http://localhost:${port}`))
