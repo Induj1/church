@@ -1,0 +1,105 @@
+name: CI Deploy
+
+on:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  deploy-admin-ui:
+    name: Build & Deploy Admin UI to Vercel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install and build admin UI
+        working-directory: admin_server/react_admin
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v20
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: admin_server/react_admin
+          vercel-args: '--prod'
+        env:
+          VITE_API_BASE: ${{ secrets.API_BASE }}
+
+  build-flutter-release:
+    name: Build Flutter AAB (release)
+    runs-on: ubuntu-latest
+    needs: deploy-proxy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+
+      - name: Decode keystore
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/key.jks
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+
+      - name: Create key.properties
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: |
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          storeFile=key.jks
+          EOF
+
+      - name: Flutter pub get
+        run: |
+          flutter pub get
+
+      - name: Build appbundle (release)
+        env:
+          API_BASE: ${{ secrets.API_BASE }}
+        run: |
+          flutter build appbundle --release --dart-define=API_BASE=${API_BASE}
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appbundle
+          path: build/app/outputs/bundle/release/app-release.aab
+
+  deploy-proxy:
+    name: Deploy admin proxy to Render
+    runs-on: ubuntu-latest
+    needs: deploy-admin-ui
+    steps:
+      - name: Trigger Render deploy
+        run: |
+          echo "Triggering deploy for Render service $RENDER_SERVICE_ID"
+          set -o pipefail
+          curl -s -X POST "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"clearCache":true}' | jq || true
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+
